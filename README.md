@@ -87,20 +87,20 @@ Res Addr:   0x006D7000  (1088 KB, romfs, bkcrc=true, payload 1024 KB)
 Air8609W（D126/D12P）的 `.soc` 是 ZIP 归档，`info.json` 描述 16 MiB NOR 分区和 A/B 脚本槽：
 
 ```bash
-luatos-cli soc info LuatOS-SoC_V0001_Air8609W_1.soc
-luatos-cli soc files LuatOS-SoC_V0001_Air8609W_1.soc
-luatos-cli soc unpack LuatOS-SoC_V0001_Air8609W_1.soc -o d126_soc
+luatos-cli soc info LuatOS-SoC_V1001_Air8609W_1.soc
+luatos-cli soc files LuatOS-SoC_V1001_Air8609W_1.soc
+luatos-cli soc unpack LuatOS-SoC_V1001_Air8609W_1.soc -o d126_soc
 ```
 
 USB 烧录（按住 BOOT 上电进入升级模式）：
 
 ```bash
-luatos-cli flash run    --soc LuatOS-SoC_V0001_Air8609W_1.soc --port auto
-luatos-cli flash script --soc LuatOS-SoC_V0001_Air8609W_1.soc --port auto
-luatos-cli flash run    --soc LuatOS-SoC_V0001_Air8609W_1.soc --script ./lua --port auto
-luatos-cli soc inject-scripts --soc LuatOS-SoC_V0001_Air8609W_1.soc --script ./lua -o custom.soc
-luatos-cli fota build --new LuatOS-SoC_V0001_Air8609W_1.soc -o d12p_fota.bin
-luatos-cli flash dump --soc LuatOS-SoC_V0001_Air8609W_1.soc --port auto --partition scripts -o scripts.bin
+luatos-cli flash run    --soc LuatOS-SoC_V1001_Air8609W_1.soc --port auto
+luatos-cli flash script --soc LuatOS-SoC_V1001_Air8609W_1.soc --port auto
+luatos-cli flash run    --soc LuatOS-SoC_V1001_Air8609W_1.soc --script ./lua --port auto
+luatos-cli soc inject-scripts --soc LuatOS-SoC_V1001_Air8609W_1.soc --script ./lua -o custom.soc
+luatos-cli fota build --new LuatOS-SoC_V1001_Air8609W_1.soc -o d12p_fota.bin
+luatos-cli flash dump --soc LuatOS-SoC_V1001_Air8609W_1.soc --port auto --partition scripts -o scripts.bin
 ```
 
 详见 [D126 / D12P](docs/models/d126-d12p.md)。

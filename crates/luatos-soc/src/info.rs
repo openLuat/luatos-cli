@@ -465,12 +465,12 @@ mod tests {
         assert!(info.kv_partition().is_none());
     }
 
-    /// D126 的 A/B 脚本槽、应用槽和运行期分区。
+    /// D126 的 A/B 脚本槽、应用槽和运行期分区（与 SDK build.py 生成的 info.json 对齐）。
     #[test]
     fn parse_d126_ab_partitions() {
         let json = r#"{
             "version": 1,
-            "chip": {"type": "d12p"},
+            "chip": {"type": "d126", "ram": {"total": 16384, "sys": 2048, "lua": 2048}},
             "rom": {
                 "file": "d12p_d126-demo124-nor_v1.0.0.img",
                 "fs": {
@@ -478,22 +478,29 @@ mod tests {
                     "script": {"offset": "d00000", "size": 1024, "type": "luadb"},
                     "script_r": {"offset": "e00000", "size": 1024, "type": "luadb"},
                     "kv": {"offset": "f00000", "size": 64, "type": "fskv"}
-                }
+                },
+                "version-core": "V1001",
+                "version-bsp": "V1001",
+                "mark": "default",
+                "build": {"build_at": "2026-11-15 11:00:08"}
             },
-            "script": {"file": "script.bin", "lua": "5.3", "bitw": 64, "use-luac": false},
+            "script": {"file": "script.bin", "lua": "5.3", "bitw": 64, "use-luac": true, "use-debug": true},
+            "fs": {"total_len": 1024, "format_len": "1000"},
             "download": {
+                "bl_addr": "0",
                 "app_addr": "100000",
-                "app1_addr": "400000",
+                "app1_addr": "500000",
                 "script_addr": "d00000",
                 "script1_addr": "e00000",
                 "fs_addr": "c00000",
-                "fskv_addr": "f00000"
+                "fskv_addr": "f00000",
+                "force_br": "115200"
             }
         }"#;
         let info: SocInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.family(), crate::ChipFamily::D12p);
         assert_eq!(info.app_addr(), Some(0x100000));
-        assert_eq!(info.app1_addr(), Some(0x400000));
+        assert_eq!(info.app1_addr(), Some(0x500000));
         assert_eq!(info.script_addr(), 0xD00000);
         assert_eq!(info.script1_addr(), Some(0xE00000));
         assert_eq!(info.script_size(), 1024 * 1024);
@@ -501,7 +508,8 @@ mod tests {
         assert_eq!(info.filesystem_partition(), Some((0xC00000, 1024 * 1024)));
         assert_eq!(info.kv_partition(), Some((0xF00000, 64 * 1024)));
         assert_eq!(info.script_bitw(), 64);
-        assert!(!info.script_use_luac());
+        assert!(info.script_use_luac());
+        assert!(!info.script_strip_debug());
     }
 }
 
