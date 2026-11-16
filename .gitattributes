@@ -12,3 +12,5 @@
 /scripts/testdata/media/* -text
 # shell 构建脚本必须保持 LF，避免 Windows checkout 后 Bash 无法解析。
 *.sh text eol=lf
+# 测试 fixture 参与 littlefs 镜像 golden SHA256 比较，各平台字节必须一致（统一 LF）。
+/tests/testcase_fixtures/** text eol=lf

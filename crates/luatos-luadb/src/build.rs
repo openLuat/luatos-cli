@@ -592,9 +592,9 @@ mod tests {
         assert_eq!(image.len(), fs_size);
     }
 
-    const LITTLEFS_SINGLE_SHA256: &str = "58267f8cfece32c1ee3b7b980b2c0cce2edb6f5ed8eb1f81b37255a126796982";
-    const LITTLEFS_ALTERNATE_SHA256: &str = "824239ae527253388a8f56933bead78ca227dbf59444306f51eef9bb27336a73";
-    const LITTLEFS_MERGED_SHA256: &str = "666221eab97e6a9fa411a13a4cd5294b1934531b349ef2ee66063437e80be3e0";
+    const LITTLEFS_SINGLE_SHA256: &str = "1305223aea280fbad90cc6bef00a63d950e0b5a9fe7696d0179c3de68279c422";
+    const LITTLEFS_ALTERNATE_SHA256: &str = "5bad40aa261f5ca524309d579943b3b2a0fcf6ce2f3704663b8abd2a8d5e2fac";
+    const LITTLEFS_MERGED_SHA256: &str = "9e44908bb7f5cbee8a0b981216827641d9989efd26c8ac50aa1f7d3c517d710b";
 
     fn littlefs_fixture(case: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/testcase_fixtures").join(case).join("scripts")
