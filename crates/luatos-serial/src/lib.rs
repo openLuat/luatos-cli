@@ -90,6 +90,7 @@ impl SerialBuffer {
 /// 单行日志的最大字节数：超过该长度仍无换行符时丢弃该行（内存保护）。
 const MAX_LINE_BYTES: usize = 16 * 1024;
 /// 对齐 LuaTools：2Mbps 下 Windows 默认 ~4KB 驱动缓冲会 RX overrun。
+#[cfg(windows)]
 const WIN_COMM_QUEUE_BYTES: u32 = 102400;
 const READ_BUF_BYTES: usize = 64 * 1024;
 

@@ -13,13 +13,17 @@ use crate::format::{Packet, END};
 use crate::{ConvertOptions, FrameRate};
 
 pub(crate) fn command(binary: &Path) -> Command {
-    let mut command = Command::new(binary);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        let mut command = Command::new(binary);
         command.creation_flags(0x08000000);
+        command
     }
-    command
+    #[cfg(not(windows))]
+    {
+        Command::new(binary)
+    }
 }
 
 pub fn find_ffmpeg(explicit: Option<&Path>) -> PathBuf {
