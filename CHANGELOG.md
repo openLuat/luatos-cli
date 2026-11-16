@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.12.0] - 2026-11-16
 
 ### 迁移
 
@@ -470,8 +470,6 @@ All notable changes to this project will be documented in this file.
 
 ⚠️ **XT804 无法做字节级验证** —— bootloader 没有读回命令，只能确认「传输成功」，
 无法确认「数据确实落在指定地址」。这是协议限制，不是实现取舍。
-
-## [1.12.0] - 2026-09-21
 
 ### 变更
 
