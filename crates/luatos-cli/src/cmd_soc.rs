@@ -176,8 +176,8 @@ pub fn cmd_soc_inject_scripts(soc: &str, script_dirs: &[String], output: &str, f
     let mut archive = luatos_soc::SocArchive::open(soc)?;
     let info = archive.info().clone();
     anyhow::ensure!(
-        info.family() == luatos_soc::ChipFamily::D12p,
-        "soc inject-scripts 仅支持 Air8609W（D126/D12P），当前芯片: {}",
+        info.family() == luatos_soc::ChipFamily::D126,
+        "soc inject-scripts 仅支持 Air8609W（D126），当前芯片: {}",
         info.chip.chip_type
     );
 
@@ -197,9 +197,9 @@ pub fn cmd_soc_inject_scripts(soc: &str, script_dirs: &[String], output: &str, f
 
     let dirs: Vec<std::path::PathBuf> = script_dirs.iter().map(std::path::PathBuf::from).collect();
     let refs: Vec<&std::path::Path> = dirs.iter().map(|path| path.as_path()).collect();
-    let scripts = luatos_flash::script::merge_d12p_scripts(&base, &refs, partition_size, luatos_luadb::LUAC_DEBUG_ALL)?;
+    let scripts = luatos_flash::script::merge_d126_scripts(&base, &refs, partition_size, luatos_luadb::LUAC_DEBUG_ALL)?;
 
-    let mut image = luatos_flash::d12p::AicImage::parse(&rom)?;
+    let mut image = luatos_flash::d126::AicImage::parse(&rom)?;
     image.replace_script_component(&scripts)?;
     let rom = image.into_bytes();
 

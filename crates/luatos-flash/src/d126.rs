@@ -1,4 +1,4 @@
-//! D12p（D126）AIC USB 升级协议。
+//! D126 AIC USB 升级协议。
 //!
 //! 设备在升级模式下枚举为厂商自定义 USB Bulk 设备（VID 0x33C3 / PID 0x6677），
 //! 传输层是 Bulk-Only Transport：31 字节 CBW + 数据 + 13 字节 CSW；
@@ -24,9 +24,9 @@ use nusb::{Device, DeviceInfo, Endpoint, Interface, MaybeFuture};
 use crate::{FlashProgress, ProgressCallback};
 
 /// ArtInChip 升级模式 VID。
-pub const D12P_VID: u16 = 0x33c3;
+pub const D126_VID: u16 = 0x33c3;
 /// ArtInChip 升级模式 PID（'fw' = 0x66 0x77）。
-pub const D12P_PID: u16 = 0x6677;
+pub const D126_PID: u16 = 0x6677;
 
 /// 单次 USB 传输超时。
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -119,9 +119,9 @@ impl AicMeta {
     }
 }
 
-/// D12p 的 MTD 分区。
+/// D126 的 MTD 分区。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct D12pPartition {
+pub struct D126Partition {
     pub name: String,
     pub offset: u64,
     pub size: u64,
@@ -129,7 +129,7 @@ pub struct D12pPartition {
 
 /// 解析 bootloader 返回的分区表字符串，例如：
 /// `spi0.0:512k(spl),128k(env),1m(scripts),64k(fskv)`。
-pub fn parse_mtd_layout(text: &str) -> Result<Vec<D12pPartition>> {
+pub fn parse_mtd_layout(text: &str) -> Result<Vec<D126Partition>> {
     let table = text.split_once(':').map(|(_, rest)| rest).unwrap_or(text);
     let mut offset = 0u64;
     let mut partitions = Vec::new();
@@ -141,7 +141,7 @@ pub fn parse_mtd_layout(text: &str) -> Result<Vec<D12pPartition>> {
         let (size_text, name) = entry.split_once('(').with_context(|| format!("分区表项格式错误: {entry}"))?;
         let name = name.strip_suffix(')').with_context(|| format!("分区表项缺少右括号: {entry}"))?;
         let size = parse_partition_size(size_text)?;
-        partitions.push(D12pPartition {
+        partitions.push(D126Partition {
             name: name.to_string(),
             offset,
             size,
@@ -322,7 +322,7 @@ fn select_device(selector: Option<&UsbSelector>) -> Result<DeviceInfo> {
     let devices: Vec<DeviceInfo> = nusb::list_devices()
         .wait()
         .context("枚举 USB 设备失败")?
-        .filter(|info| info.vendor_id() == D12P_VID && info.product_id() == D12P_PID)
+        .filter(|info| info.vendor_id() == D126_VID && info.product_id() == D126_PID)
         .collect();
 
     if devices.is_empty() {
@@ -771,7 +771,7 @@ fn report_progress(on_progress: &ProgressCallback, meta: &AicMeta, sent: u64, to
     let percent = if total == 0 { 0.0 } else { (sent as f32 * 100.0 / total as f32).min(100.0) };
     let region = if meta.partition.is_empty() { meta.name.as_str() } else { meta.partition.as_str() };
     let message = format!("写入 {}", meta.name);
-    on_progress(&FlashProgress::info("D12p", percent, &message).with_region(region));
+    on_progress(&FlashProgress::info("D126", percent, &message).with_region(region));
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<()> {
@@ -934,7 +934,7 @@ pub fn flash_partition_data(
 
 /// 读回一个命名分区（U-Boot 阶段 `READ_FWC_DATA`）。
 ///
-/// D12p 的 AIC 协议没有任意地址读，只能按 MTD 分区读；设备在 Boot ROM
+/// D126 的 AIC 协议没有任意地址读，只能按 MTD 分区读；设备在 Boot ROM
 /// 阶段时先用 `bootstrap_image` 引导到 U-Boot。
 pub fn dump_partition(partition: &str, bootstrap_image: Option<&[u8]>, selector: Option<&str>, on_progress: &ProgressCallback, cancel: Arc<AtomicBool>) -> Result<Vec<u8>> {
     let selector = UsbSelector::parse(selector)?;
@@ -960,7 +960,7 @@ pub fn dump_partition(partition: &str, bootstrap_image: Option<&[u8]>, selector:
 
     let size = usize::try_from(part.size).context("分区过大")?;
     let message = format!("读取 {} ({} 字节)", part.name, part.size);
-    on_progress(&FlashProgress::info("D12p", 0.0, &message).with_region(&part.name));
+    on_progress(&FlashProgress::info("D126", 0.0, &message).with_region(&part.name));
 
     let meta = media_partition(&part.name, part.offset, part.size);
     session.link.send_cmd_header(CMD_READ_FWC_DATA, meta.len() as u32)?;
@@ -978,7 +978,7 @@ pub fn dump_partition(partition: &str, bootstrap_image: Option<&[u8]>, selector:
         data.extend_from_slice(&buf);
         let percent = data.len() as f32 * 100.0 / size as f32;
         let message = format!("读取 {}", part.name);
-        on_progress(&FlashProgress::info("D12p", percent, &message).with_region(&part.name));
+        on_progress(&FlashProgress::info("D126", percent, &message).with_region(&part.name));
     }
 
     session.finish()?;
@@ -1044,7 +1044,7 @@ mod tests {
     fn build_image() -> Vec<u8> {
         let mut image = vec![0u8; IMAGE_HDR_SIZE + META_SIZE * 2 + 0x100];
         image[0..6].copy_from_slice(b"AIC.FW");
-        copy_cstr(&mut image[0x08..0x48], "d12p");
+        copy_cstr(&mut image[0x08..0x48], "d126");
         copy_cstr(&mut image[0x48..0x88], "d126-test");
         copy_cstr(&mut image[0x88..0xc8], "1.0.0");
         copy_cstr(&mut image[0xc8..0x108], "spi-nor");
@@ -1068,7 +1068,7 @@ mod tests {
     #[test]
     fn parse_aic_image_reads_components() {
         let image = AicImage::parse(&build_image()).expect("parse");
-        assert_eq!(image.platform, "d12p");
+        assert_eq!(image.platform, "d126");
         assert_eq!(image.product, "d126-test");
         assert_eq!(image.media_type, "spi-nor");
         assert_eq!(image.metas.len(), 2);
@@ -1141,7 +1141,7 @@ mod tests {
         assert_eq!(parts.len(), 4);
         assert_eq!(
             parts[0],
-            D12pPartition {
+            D126Partition {
                 name: "spl".into(),
                 offset: 0,
                 size: 512 * 1024

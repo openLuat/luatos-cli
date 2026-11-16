@@ -472,7 +472,7 @@ mod tests {
             "version": 1,
             "chip": {"type": "d126", "ram": {"total": 16384, "sys": 2048, "lua": 2048}},
             "rom": {
-                "file": "d12p_d126-demo124-nor_v1.0.0.img",
+                "file": "d126-demo124-nor_v1.0.0.img",
                 "fs": {
                     "filesystem": {"offset": "c00000", "size": 1024, "type": "lfs"},
                     "script": {"offset": "d00000", "size": 1024, "type": "luadb"},
@@ -498,7 +498,7 @@ mod tests {
             }
         }"#;
         let info: SocInfo = serde_json::from_str(json).unwrap();
-        assert_eq!(info.family(), crate::ChipFamily::D12p);
+        assert_eq!(info.family(), crate::ChipFamily::D126);
         assert_eq!(info.app_addr(), Some(0x100000));
         assert_eq!(info.app1_addr(), Some(0x500000));
         assert_eq!(info.script_addr(), 0xD00000);

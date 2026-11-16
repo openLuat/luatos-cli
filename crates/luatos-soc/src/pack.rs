@@ -1,6 +1,6 @@
 // SOC file packing — create and update .soc archives.
 //
-// ZIP format is used for bk72xx / air8101 / air8000 / d12p.
+// ZIP format is used for bk72xx / air8101 / air8000 / d126.
 // 7z format is used for air6208 / air101 / air103.
 
 use anyhow::{ensure, Context, Result};
@@ -266,7 +266,7 @@ mod tests {
     fn repack_zip_replaces_entry_and_keeps_others() {
         let tempdir = tempfile::tempdir().unwrap();
         let dir = tempdir.path();
-        fs::write(dir.join("info.json"), r#"{"version":1,"chip":{"type":"d12p"}}"#).unwrap();
+        fs::write(dir.join("info.json"), r#"{"version":1,"chip":{"type":"d126"}}"#).unwrap();
         fs::write(dir.join("a.bin"), b"OLD").unwrap();
         fs::write(dir.join("b.bin"), b"KEEP").unwrap();
 
@@ -289,7 +289,7 @@ mod tests {
     fn repack_rejects_missing_entry() {
         let tempdir = tempfile::tempdir().unwrap();
         let dir = tempdir.path();
-        fs::write(dir.join("info.json"), r#"{"version":1,"chip":{"type":"d12p"}}"#).unwrap();
+        fs::write(dir.join("info.json"), r#"{"version":1,"chip":{"type":"d126"}}"#).unwrap();
         let soc = dir.join("in.soc");
         pack_soc_zip(dir, soc.to_str().unwrap()).unwrap();
         let error = repack_soc_zip(soc.to_str().unwrap(), dir.join("out.soc").to_str().unwrap(), &[("missing.bin", Vec::new())]).unwrap_err();

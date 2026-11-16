@@ -6,34 +6,35 @@ All notable changes to this project will be documented in this file.
 
 ### 迁移
 
-#### Air8609W（D126/D12P）脚本分区
+#### Air8609W（D126）脚本分区
 
 - 固件不再内嵌 Lua；从旧固件升级必须整包烧录一次（`flash run`），只写 `scripts` 分区在旧固件上不会生效。
 - 旧 `.soc` 的 `scripts.luadb` 仍兼容（CLI 读取 `info.script.file`）；新 SDK 统一为 `script.bin`。
 - `flash script --script <目录>` 会保留 `.soc` 内的 corelib 再合入应用脚本；`--bin` 必须提供包含 corelib 的完整 luadb 镜像。
-- `.soc` 包名改为 `LuatOS-SoC_V0001_Air8609W_1.soc`。
+- `.soc` 包名改为 `LuatOS-SoC_V1001_Air8609W_1.soc`。
 
 ### 新增
 
-#### Air8609W（D126/D12P）USB 烧录
+#### Air8609W（D126）USB 烧录
 
-- D126 模组正式命名为 Air8609W；D126 仍用于芯片和板级配置名，`.soc` 包名改为 `LuatOS-SoC_V0001_Air8609W_1.soc`。
+- D126 模组正式命名为 Air8609W；D126 仍用于芯片和板级配置名，`.soc` 包名改为 `LuatOS-SoC_V1001_Air8609W_1.soc`。
 - 新增 `air8609w` 型号别名，`guide model --model air8609w` 与 `d126` 指向同一文档。
 
-- `luatos-flash` 新增 `d12p` 模块：用 `nusb` 实现 ArtInChip AIC USB 升级协议（VID `0x33C3` / PID `0x6677`，Bulk-Only Transport CBW/CSW + `UPGC`/`UPGR` 命令头），支持全量镜像与脚本分区。
+- `luatos-flash` 新增 `d126` 模块：用 `nusb` 实现 ArtInChip AIC USB 升级协议（VID `0x33C3` / PID `0x6677`，Bulk-Only Transport CBW/CSW + `UPGC`/`UPGR` 命令头），支持全量镜像与脚本分区。
 - `flash run --soc` 自动解析 `.soc` 内的 AIC 镜像，处理 Boot ROM 下载 updater 后的设备重新枚举，再写 `spl` / `env` / `env_r` / `scripts` / `os`；完成后通过 U-Boot `reset` 重启设备。
 - `flash script --soc` 从 `.soc` 取 `script.bin` 走分区升级；也可用 `--bin` 指定完整 luadb 镜像。设备仍在 Boot ROM 时会自动下载 `.soc` 内 updater 进入 U-Boot，支持按住 BOOT 上电后直接烧脚本。`--port` 对 D126 表示 USB 选择器（`bus:port`，省略或 `auto` 表示自动选择）。
 - 设备需要按住 BOOT 上电进入升级模式；Linux 需要 `33c3:6677` 的 udev 规则，Windows 需要先绑定 WinUSB 驱动。
-- `ChipFamily` 增加 `D12p`，识别 `d12p` / `d126` / `d126fcr` / `artinchip`；`soc info/files/unpack/pack` 支持 D126 的 ZIP `.soc`。
+- `ChipFamily` 增加 `D126`，识别 `d126` / `d126fcr` / `artinchip`；`soc info/files/unpack/pack` 支持 D126 的 ZIP `.soc`。
 - `info.json` 支持 D126 A/B 字段：`rom.fs.script_r`、`download.app1_addr`、`download.script1_addr`；`soc info` 打印 App/App1/Script/Script1/Script B。
-- D126 的 `data`/`fskv` 是运行期分区；`script.bitw=64`、`use-luac=false`，与 SDK 的 luadb 脚本包一致。
+- D126 的 `data`/`fskv` 是运行期分区；`script.bitw=64`，与 SDK 的 luadb 脚本包一致。
+- 按最新 SDK（V1001）适配 Air8609W `info.json`：`chip.type` 统一为 `d126`，`ram.lua` 改为 2048，`os`/`os_r` 扩到 4 MiB、`app1_addr` 移到 `0x500000`，分区表补齐 `env`/`env_r`/`userid`/`rodata`；`use-luac` 改为 `true`（固件改用上游 `luat_main()` + `loadlib.c`，已支持加载预编译 `.luac`，CLI 合入用户脚本时按 `use-luac` 预编译）；新增顶层 `fs`（`total_len`/`format_len`）与 `rom.build` 字段，`nvm_addr` 移除；`.soc` 内容物改名 `d126.*`，并新增 `partition.json` 与 `fota.bin` / `fota-script.bin`。
 - `flash run --script <目录>` 与 `flash script --script <目录>` 支持 D126：以 `.soc` 内 `script.bin` 的 corelib（`sys.lua` / `sysplus.lua` / `libnet.lua`）为基准，替换应用脚本后重新打包；`luatos-luadb` 新增 LuaDB 解析器。
 - 新增 `soc inject-scripts --soc <in> --script <dir> -o <out>`：同时更新 `.soc` 的 `script.bin` 和 AIC 镜像内的 `image.target.scripts` 组件及其 META CRC。
 - `fota build --new <d126.soc> [--script-only]` 生成 LFTA 包（part 0 脚本、part 1 `*_os.itb`），输出与 SDK `build.py` 的 `fota.bin` / `fota-script.bin` 逐字节一致。
 - `flash flash-fs` / `clear-fs` / `clear-kv` 支持 D126：LittleFS 镜像（4 KiB 块）写入 `data` 分区，清空操作向 `data`/`fskv` 写全 0xFF，与运行期的“仅全 0xFF 才自动格式化”策略配合。
 - `flash dump --partition <name>` 支持 D126：先读 MTD 分区表，再用 `READ_FWC_DATA` 按 64 KiB 分块读回；`--addr/--len` 形式仍只用于 BK7258。
 - D126 `.soc` 内的脚本镜像文件名从 `scripts.luadb` 统一为 `script.bin`，与其他平台一致；内容仍是 LuaDB/Luadb 格式，CLI 通过 `info.script.file` 读取，不硬编码。
-- 暂不支持 `flash raw`、`flash test`、`flash-res` 和 D126 差分 FOTA。说明见 [D126 / D12P](docs/models/d126-d12p.md)。
+- 暂不支持 `flash raw`、`flash test`、`flash-res` 和 D126 差分 FOTA。说明见 [D126](docs/models/d126.md)。
 
 #### 160X 文件系统与 FSKV 组合烧录
 
