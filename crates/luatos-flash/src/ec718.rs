@@ -25,6 +25,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{FlashProgress, ProgressCallback};
 
+mod ports;
+
 // ─── Embedded AgentBoot Binaries ─────────────────────────────────────────────
 
 const AGENTBOOT_EC718M_USB: &[u8] = include_bytes!("../../../refs/origin_tools/ec_download/agentboot/ec718m_usb.bin");
@@ -71,6 +73,49 @@ struct SocFirmware {
 }
 
 impl SocFirmware {
+    fn check_rom(&self, version: &[u8]) -> Result<()> {
+        // 各 product_sets 的 rom_version 配置为两个小端字。仅比较芯片族，
+        // 同族不同掩膜修订可有不同版本号；HM/PM 还须由 AgentBoot 验证容量。
+        let bytes: [u8; 8] = version.get(..8).context("Boot ROM 版本响应不完整")?.try_into()?;
+        let rom = u64::from_le_bytes(bytes);
+        let (expected, _) = self.hardware_profile()?;
+        anyhow::ensure!(
+            (rom as u32 >> 16) == expected,
+            "目标芯片不匹配：固件 {} 要求 ROM 族 0x{expected:04X}，设备返回 0x{rom:016X}",
+            self.binpkg.chip
+        );
+        Ok(())
+    }
+
+    /// 容量来自厂商 PrMgrCfg.json 的 AP 存储项，不按文件名或脚本地址猜测。
+    fn hardware_profile(&self) -> Result<(u32, Option<u8>)> {
+        if self.chip == EigencommChip::Ec618 {
+            return Ok((0x0200, None)); // EC618 是独立 AP/CP 双 Flash，使用不同的下载协议配置。
+        }
+        match self.binpkg.chip.to_ascii_uppercase().as_str() {
+            "EC718HM_PRD" | "EC718UM_PRD" => Ok((0x0303, Some(8))),
+            "EC718PM_PRD" => Ok((0x0303, Some(4))),
+            "EC718SM_PRD" => Ok((0x0303, Some(2))),
+            "EC718U_PRD" => Ok((0x0300, Some(8))),
+            "EC718P_PRD" | "EC718PEF_PRD" => Ok((0x0300, Some(4))),
+            "EC718S_PRD" | "EC718SEF_PRD" => Ok((0x0300, Some(2))),
+            "EC716E_PRD" => Ok((0x0301, Some(4))),
+            "EC716S_PRD" => Ok((0x0301, Some(2))),
+            other => bail!("无法确定固件产品 {other} 的目标 Flash 配置，已停止烧录。请使用带有完整产品标识的固件包"),
+        }
+    }
+
+    fn check_ap_range(&self, name: &str, offset: u32, len: usize) -> Result<()> {
+        if let (_, Some(mib)) = self.hardware_profile()? {
+            anyhow::ensure!(
+                u64::from(offset).checked_add(len as u64).is_some_and(|end| end <= u64::from(mib) << 20),
+                "镜像 {name}（偏移 0x{offset:X}，{len} 字节）超过 {} 的 AP Flash 容量 {mib} MiB",
+                self.binpkg.chip
+            );
+        }
+        Ok(())
+    }
+
     fn agentboot(&self, port_type: Ec718PortType) -> &[u8] {
         match (self.chip, port_type) {
             (EigencommChip::Ec618, Ec718PortType::Usb) => self.usb_agentboot.as_deref().unwrap_or(AGENTBOOT_EC618_USB),
@@ -114,6 +159,7 @@ const CMD_DOWNLOAD_DATA: u8 = 0x32;
 const CMD_DONE: u8 = 0x3a;
 
 // LPC commands
+const LPC_EXTEND: u8 = 0xe0;
 const LPC_FLASH_ERASE: u8 = 0x10;
 const LPC_BURN_ONE: u8 = 0x42;
 const LPC_GET_BURN_STATUS: u8 = 0x44;
@@ -196,14 +242,16 @@ impl Ec718PortType {
     }
 }
 
+fn is_eigencomm_usb(vid: u16, pid: u16) -> bool {
+    (vid, pid) == (BOOT_VID, BOOT_PID) || (vid, pid) == (LOG_VID, LOG_PID)
+}
+
 /// Detect port type from serial port info (USB VID/PID check).
 pub fn detect_port_type(port_name: &str) -> Ec718PortType {
     if let Ok(ports) = serialport::available_ports() {
         for p in &ports {
-            if p.port_name == port_name {
-                if let serialport::SerialPortType::UsbPort(_) = &p.port_type {
-                    return Ec718PortType::Usb;
-                }
+            if p.port_name == port_name && matches!(&p.port_type, serialport::SerialPortType::UsbPort(usb) if is_eigencomm_usb(usb.vid, usb.pid)) {
+                return Ec718PortType::Usb;
             }
         }
     }
@@ -258,6 +306,7 @@ fn com_read(port: &mut dyn SerialPort, len: usize) -> Result<Option<Vec<u8>>> {
     let mut total = 0;
     while total < len {
         match port.read(&mut buf[total..]) {
+            Ok(0) => break,
             Ok(n) => total += n,
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
             Err(e) => return Err(e).context("Serial read failed"),
@@ -624,6 +673,14 @@ fn send_recv_cmd(port: &mut dyn SerialPort, cmd: &mut Cmd, data: &[u8], dlboot: 
     let rsp = Rsp::unpack(&recv_buf);
     let rsp_data = if rsp.len > 0 { com_read(port, rsp.len as usize)? } else { None };
 
+    if cmd.cmd == CMD_GET_VERSION && dlboot {
+        anyhow::ensure!(
+            [rsp.cmd, rsp.index, rsp.order_id, rsp.norder_id] == [cmd.cmd, cmd.index, cmd.order_id, cmd.norder_id]
+                && rsp_data.as_deref().unwrap_or_default().len() == usize::from(rsp.len),
+            "Boot ROM 版本响应与请求不匹配或被截断"
+        );
+    }
+
     // In AGBOOT mode, read trailing CRC32
     if !dlboot {
         let _ = com_read(port, 4)?;
@@ -668,8 +725,16 @@ fn send_recv_lpc_cmd(port: &mut dyn SerialPort, cmd: &mut LpcCmd, data: &[u8]) -
 
         let rsp_data = if rsp.len > 0 { com_read(port, rsp.len as usize)? } else { None };
 
-        // Read trailing CRC32
-        let _ = com_read(port, 4)?;
+        let crc = com_read(port, 4)?;
+        anyhow::ensure!(rsp_data.as_deref().unwrap_or_default().len() == usize::from(rsp.len), "LPC 响应数据不完整");
+        let mut hash = crc32fast::Hasher::new();
+        hash.update(&recv_buf);
+        hash.update(rsp_data.as_deref().unwrap_or_default());
+        anyhow::ensure!(crc.as_deref() == Some(hash.finalize().to_le_bytes().as_slice()), "LPC 响应 CRC32 错误");
+        anyhow::ensure!(
+            [rsp.cmd, rsp.index, rsp.order_id, rsp.norder_id] == [cmd.cmd, cmd.index, cmd.order_id, cmd.norder_id],
+            "LPC 响应与请求不匹配"
+        );
 
         if rsp.state != 0 {
             log::warn!("LPC response not ACK: state={}", rsp.state);
@@ -682,9 +747,13 @@ fn send_recv_lpc_cmd(port: &mut dyn SerialPort, cmd: &mut LpcCmd, data: &[u8]) -
 
 // ─── Package Protocol Commands ──────────────────────────────────────────────
 
-fn package_get_version(port: &mut dyn SerialPort, dlboot: bool) -> Result<i32> {
+fn package_get_version(port: &mut dyn SerialPort, dlboot: bool, target: Option<&SocFirmware>) -> Result<i32> {
     let mut cmd = Cmd::new(CMD_GET_VERSION);
     let (ok, data) = send_recv_cmd(port, &mut cmd, &[], dlboot)?;
+    if let Some(plan) = target {
+        anyhow::ensure!(ok == 0, "Boot ROM 未响应 GET_VERSION");
+        plan.check_rom(data.as_deref().unwrap_or_default())?;
+    }
     if ok == 0 {
         if let Some(ref d) = data {
             if d.len() >= 16 {
@@ -722,8 +791,8 @@ fn package_verify_image(port: &mut dyn SerialPort, dlboot: bool) -> Result<i32> 
     Ok(ok)
 }
 
-fn package_base_info(port: &mut dyn SerialPort, img_type: u32, dlboot: bool) -> Result<i32> {
-    let ok = package_get_version(port, dlboot)?;
+fn package_base_info(port: &mut dyn SerialPort, img_type: u32, dlboot: bool, target: Option<&SocFirmware>) -> Result<i32> {
+    let ok = package_get_version(port, dlboot, target)?;
     if ok != 0 {
         return Ok(-1);
     }
@@ -884,10 +953,10 @@ fn lpc_sys_reset(port: &mut dyn SerialPort) -> Result<i32> {
 // ─── High-Level Burn Operations ─────────────────────────────────────────────
 
 /// Download agent boot binary to device RAM.
-fn burn_agboot(port: &mut dyn SerialPort, agent_data: &[u8], baud: u32) -> Result<()> {
+fn burn_agboot(port: &mut dyn SerialPort, agent_data: &[u8], baud: u32, firmware: &SocFirmware) -> Result<()> {
     log::info!("Downloading agent boot ({} bytes)", agent_data.len());
 
-    let ret = package_base_info(port, BurnImageType::Head.identifier(), true)?;
+    let ret = package_base_info(port, BurnImageType::Head.identifier(), true, Some(firmware))?;
     if ret != 0 {
         bail!("Agent boot base_info(HEAD) failed");
     }
@@ -896,7 +965,7 @@ fn burn_agboot(port: &mut dyn SerialPort, agent_data: &[u8], baud: u32) -> Resul
 
     burn_sync(port, SyncType::DlBoot, 2)?;
 
-    let ret = package_base_info(port, BurnImageType::Bootloader.identifier(), true)?;
+    let ret = package_base_info(port, BurnImageType::Bootloader.identifier(), true, None)?;
     if ret != 0 {
         bail!("Agent boot base_info(BL) failed");
     }
@@ -941,7 +1010,7 @@ fn burn_img(
     burn_sync(port, SyncType::AgBoot, 2)?;
 
     // 4. Base info
-    let ret = package_base_info(port, BurnImageType::Head.identifier(), false)?;
+    let ret = package_base_info(port, BurnImageType::Head.identifier(), false, None)?;
     if ret != 0 {
         bail!("base_info failed for {}", tag);
     }
@@ -957,7 +1026,7 @@ fn burn_img(
     while remain > 0 {
         burn_sync(port, SyncType::AgBoot, 2)?;
         // 每个数据块都要重新选择并校验镜像，不能直接发送 DATA_HEAD。
-        if package_base_info(port, img_type.identifier(), false)? != 0 {
+        if package_base_info(port, img_type.identifier(), false, None)? != 0 {
             bail!("数据块镜像选择失败: {}", tag);
         }
 
@@ -1094,6 +1163,23 @@ fn script_burn_addr(addr: u32) -> u32 {
     }
 }
 
+/// 对齐厂商 LPCETCRunTmCfg：只启用芯片 Flash 容量验证，不配置板级电源等参数。
+fn verify_target(port: &mut dyn SerialPort, mib: u8) -> Result<()> {
+    burn_sync(port, SyncType::Lpc, 2)?;
+    let payload = [1, 1, 0, 0, 4, 0, 0, 0, 0x20, 2, 1, mib];
+    let mut cmd = LpcCmd::new(LPC_EXTEND);
+    cmd.len = payload.len() as u32;
+    let (ack, response) = send_recv_lpc_cmd(port, &mut cmd, &payload)?;
+    anyhow::ensure!(ack == 0, "设备未确认容量校验命令");
+    verify_runtime_result(response.as_deref().unwrap_or_default())
+}
+
+fn verify_runtime_result(response: &[u8]) -> Result<()> {
+    let flags = u32::from_le_bytes(response.try_into().context("设备未返回完整的 4 字节容量校验结果")?);
+    anyhow::ensure!(flags & 1 != 0, "设备报告固件与模块 Flash 配置不匹配（校验结果 0x{flags:08X}）");
+    Ok(())
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /// USB Boot mode VID/PID for EC718 series.
@@ -1117,20 +1203,14 @@ pub const LOG_PID: u16 = 0x0001;
 ///
 /// Returns true if the reboot command was sent successfully.
 pub fn try_reboot_to_download(on_progress: &ProgressCallback) -> bool {
-    // Find command port (VID=0x19D1, PID=0x0001)
-    let cmd_port = find_ec718_cmd_port();
-    let cmd_port = match cmd_port {
-        Some(p) => p,
-        None => {
-            log::info!("No EC718 command port found (module may already be in boot mode or disconnected)");
-            return false;
-        }
-    };
+    ports::reboot_unique(on_progress).unwrap_or(false)
+}
 
+fn reboot_at(cmd_port: &str, on_progress: &ProgressCallback) -> bool {
     on_progress(&FlashProgress::info("Rebooting", 0.0, &format!("发现运行中的模组 {}, 正在发送重启指令...", cmd_port)));
     log::info!("Found EC718 command port {}, sending reboot-to-download sequence", cmd_port);
 
-    let port = serialport::new(&cmd_port, 115200).timeout(Duration::from_millis(500)).open();
+    let port = serialport::new(cmd_port, 115200).timeout(Duration::from_millis(500)).open();
 
     let mut port = match port {
         Ok(p) => p,
@@ -1322,98 +1402,9 @@ pub fn wait_for_log_port(timeout_secs: u32) -> Option<String> {
     None
 }
 
-/// Automatically detect module state and enter boot mode if needed.
-///
-/// Flow:
-///   1. Check if already in boot mode (VID=0x17D1) → use that port
-///   2. If running (VID=0x19D1) → send AT+ECRST + DIAG reboot, wait for boot port
-///   3. If neither found → prompt user for manual BOOT button intervention
-///   4. If user-specified port is given, try it directly as UART fallback
-///
-/// Returns the boot port name to use for flashing.
-///
-/// `user_port` 为 `None`、空串或 `"auto"` 时表示未指定端口，交由自动探测处理。
+/// 返回指定设备的下载口；运行态 USB 设备重枚举后按物理位置重新关联。
 pub fn auto_enter_boot_mode(user_port: Option<&str>, on_progress: &ProgressCallback) -> Result<String> {
-    // `--port auto`（或空串）只是「自动探测」的占位符，不能当作真实设备名去打开；
-    // 否则探测失败时会回退到打开名为 "auto" 的串口并报 "No such file or directory"。
-    let user_port = crate::device::normalize_serial_port(user_port);
-
-    // If user specified a port, check if it's already a boot mode port
-    if let Some(port) = user_port {
-        if let Ok(ports) = serialport::available_ports() {
-            for p in &ports {
-                if p.port_name == port && matches!(&p.port_type, serialport::SerialPortType::UsbPort(usb) if usb.vid == BOOT_VID && usb.pid == BOOT_PID) {
-                    log::info!("User-specified port {} is already in boot mode", port);
-                    return Ok(port.to_string());
-                }
-            }
-        }
-    }
-
-    // Step 1: Check if already in boot mode
-    if let Some(boot_port) = find_port_by_vid_pid(BOOT_VID, BOOT_PID) {
-        on_progress(&FlashProgress::info("Detecting", 1.0, &format!("模组已处于下载模式: {}", boot_port)));
-        log::info!("Module already in boot mode on {}", boot_port);
-        return Ok(boot_port);
-    }
-
-    // Step 2: Check if running and try auto-reboot
-    if find_ec718_cmd_port().is_some() {
-        on_progress(&FlashProgress::info("Detecting", 1.0, "检测到运行中的模组, 正在自动重启进入下载模式..."));
-
-        if try_reboot_to_download(on_progress) {
-            // Wait for boot port to appear (up to 30 seconds)
-            on_progress(&FlashProgress::info("Waiting", 2.0, "等待模组重启进入下载模式 (最多30秒)..."));
-
-            if let Some(boot_port) = wait_for_boot_port(30) {
-                on_progress(&FlashProgress::info("Detecting", 3.0, &format!("模组已进入下载模式: {}", boot_port)));
-                log::info!("Module entered boot mode on {}", boot_port);
-                // Give the USB device a moment to fully initialize
-                std::thread::sleep(Duration::from_millis(500));
-                return Ok(boot_port);
-            }
-
-            on_progress(&FlashProgress::info(
-                "Warning",
-                -1.0,
-                "⚠ 自动重启超时. 请手动操作:\n\
-                 1. 按住BOOT按钮\n\
-                 2. 按下RESET或重新上电\n\
-                 3. 松开BOOT按钮\n\
-                 等待模组进入下载模式...",
-            ));
-        }
-    } else {
-        on_progress(&FlashProgress::info(
-            "Warning",
-            -1.0,
-            "⚠ 未检测到EC718模组. 请:\n\
-             1. 确认模组已连接并上电\n\
-             2. 按住BOOT按钮, 然后按RESET或重新上电, 再松开BOOT\n\
-             等待模组进入下载模式...",
-        ));
-    }
-
-    // Step 3: Wait for manual boot entry (60 seconds)
-    if let Some(boot_port) = wait_for_boot_port(60) {
-        on_progress(&FlashProgress::info("Detecting", 3.0, &format!("模组已进入下载模式: {}", boot_port)));
-        std::thread::sleep(Duration::from_millis(500));
-        return Ok(boot_port);
-    }
-
-    // If user specified a port, try it as fallback (UART mode)
-    if let Some(port) = user_port {
-        on_progress(&FlashProgress::info("Fallback", 2.0, &format!("使用用户指定端口: {} (UART模式)", port)));
-        return Ok(port.to_string());
-    }
-
-    bail!(
-        "无法进入下载模式. 请手动操作:\n\
-         1. 按住BOOT按钮\n\
-         2. 按下RESET或重新上电\n\
-         3. 松开BOOT按钮\n\
-         然后重新运行刷机命令."
-    );
+    ports::enter(user_port, on_progress)
 }
 
 /// Build a SOC log probe frame for EC718 (same protocol as CCM4211/Air1601/Air1602/Air1603/Air1604).
@@ -1531,16 +1522,18 @@ fn prepare_binpkg(data: &[u8]) -> Result<SocFirmware> {
     })
 }
 
-fn flash_firmware(firmware: &SocFirmware, port: &str, on_progress: &ProgressCallback, cancel: Arc<AtomicBool>) -> Result<()> {
-    let binpkg = &firmware.binpkg;
-    log::info!(
-        "{} package: {}, {} entries, force_br={}",
-        firmware.chip.name(),
-        binpkg.chip,
-        binpkg.entries.len(),
-        firmware.force_br
-    );
+fn verified_session(firmware: &SocFirmware, port: &str, progress: &ProgressCallback, cancel: &AtomicBool) -> Result<Box<dyn SerialPort>> {
+    let (_, capacity) = firmware.hardware_profile()?;
+    let mut serial = load_flash_agent(firmware, port, progress, cancel)?;
+    if let Some(mib) = capacity {
+        let expected = format!("目标端口 {port}，固件 {} 要求 AP Flash {mib} MiB", firmware.binpkg.chip);
+        progress(&FlashProgress::info("Verifying", 15.0, &expected));
+        verify_target(serial.as_mut(), mib).with_context(|| format!("{expected}：硬件校验未通过，未擦写 Flash"))?;
+    }
+    Ok(serial)
+}
 
+fn load_flash_agent(firmware: &SocFirmware, port: &str, on_progress: &ProgressCallback, cancel: &AtomicBool) -> Result<Box<dyn SerialPort>> {
     // Determine port type and agentboot binary
     let port_type = detect_port_type(port);
     let agentboot = firmware.agentboot(port_type);
@@ -1591,13 +1584,32 @@ fn flash_firmware(firmware: &SocFirmware, port: &str, on_progress: &ProgressCall
 
     // USB 下载使用厂商配置的 921600，不能套用 SOC 中面向 UART 的 force_br。
     let agent_baud = if port_type == Ec718PortType::Usb { baudrate } else { firmware.force_br };
-    burn_agboot(serial.as_mut(), agentboot, agent_baud)?;
+    burn_agboot(serial.as_mut(), agentboot, agent_baud, firmware).with_context(|| format!("端口 {port} 校验 Boot ROM 或加载 AgentBoot 失败，未擦写 Flash"))?;
+    if port_type == Ec718PortType::Uart && agent_baud > 0 {
+        serial.set_baud_rate(agent_baud).context("切换到 AgentBoot 波特率失败")?;
+    }
 
     on_progress(&FlashProgress::info("AgentBoot", 15.0, "AgentBoot loaded"));
 
-    if cancel.load(Ordering::Relaxed) {
-        bail!("Cancelled");
+    Ok(serial)
+}
+
+fn flash_firmware(firmware: &SocFirmware, port: &str, on_progress: &ProgressCallback, cancel: Arc<AtomicBool>) -> Result<()> {
+    let binpkg = &firmware.binpkg;
+    log::info!(
+        "{} package: {}, {} entries, force_br={}",
+        firmware.chip.name(),
+        binpkg.chip,
+        binpkg.entries.len(),
+        firmware.force_br
+    );
+
+    for entry in &binpkg.entries {
+        if let (Some(data), Some((_, STYPE_AP_FLASH, _))) = (&entry.data, entry_to_burn_type(entry, firmware.chip)) {
+            firmware.check_ap_range(&entry.name, ap_flash_offset(entry.addr), data.len())?;
+        }
     }
+    let mut serial = verified_session(firmware, port, on_progress, &cancel)?;
 
     // Stage 3: Burn each partition
     let entries: Vec<_> = binpkg.entries.iter().filter(|e| e.data.is_some()).collect();
@@ -1665,42 +1677,8 @@ pub fn flash_script_ec718(soc_path: &str, port: &str, script_data: &[u8], on_pro
     // Hardware needs absolute addr with 0x800000 base for AP flash.
     let burn_addr = script_burn_addr(script_addr);
 
-    let port_type = detect_port_type(port);
-    let agentboot = firmware.agentboot(port_type);
-
-    on_progress(&FlashProgress::info("Connecting", 1.0, &format!("Opening {}...", port)));
-
-    let baudrate = port_type.baudrate();
-    let mut serial = serialport::new(port, baudrate)
-        .timeout(Duration::from_millis(800))
-        .open()
-        .with_context(|| format!("Failed to open serial port {}", port))?;
-
-    serial.write_data_terminal_ready(true)?;
-
-    if cancel.load(Ordering::Relaxed) {
-        bail!("Cancelled");
-    }
-
-    on_progress(&FlashProgress::info(
-        "Connecting",
-        2.0,
-        "Waiting for bootloader...\n\
-         提示: 如果等待超时, 请手动按住BOOT按钮并复位模组进入下载模式",
-    ));
-
-    if let Err(e) = burn_sync(serial.as_mut(), SyncType::DlBoot, 2) {
-        on_progress(&FlashProgress::info(
-            "Connecting",
-            -1.0,
-            "⚠ 无法连接到bootloader. 请按住BOOT按钮, 然后复位或重新上电模组, 再重试.",
-        ));
-        return Err(e).context("DLBOOT sync failed - module not in boot mode");
-    }
-
-    on_progress(&FlashProgress::info("AgentBoot", 10.0, "Downloading agentboot..."));
-    let agent_baud = if port_type == Ec718PortType::Usb { baudrate } else { firmware.force_br };
-    burn_agboot(serial.as_mut(), agentboot, agent_baud)?;
+    firmware.check_ap_range("script", ap_flash_offset(script_addr), script_data.len())?;
+    let mut serial = verified_session(&firmware, port, on_progress, &cancel)?;
 
     if cancel.load(Ordering::Relaxed) {
         bail!("Cancelled");
@@ -1734,6 +1712,49 @@ pub fn flash_script_ec718(soc_path: &str, port: &str, script_data: &[u8], on_pro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 两种量产固件的脚本和_flash_边界在打开端口前校验() {
+        for (file, mib, script_kib) in [("LuatOS-SoC_V2031_Air8000_105.soc", 8, 512), ("LuatOS-SoC_V2029_Air780EPM_1.soc", 4, 256)] {
+            let soc = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../refs/soc_files").join(file);
+            let plan = parse_soc(soc.to_str().unwrap()).unwrap();
+            assert_eq!(plan.hardware_profile().unwrap(), (0x0303, Some(mib)));
+            assert!(plan.check_rom(&[0, 0, 3, 3, 1, 0, 0, 0]).is_ok());
+            assert!(plan.check_rom(&[0, 0, 1, 3, 1, 0, 0, 0]).is_err());
+            assert!(plan.check_rom(&[0, 0, 3, 3]).is_err());
+            let info = luatos_soc::read_soc_info(soc.to_str().unwrap()).unwrap();
+            crate::validate_script_image(&info, script_kib * 1024, 1).unwrap();
+            assert!(crate::validate_script_image(&info, script_kib * 1024 + 1, 1)
+                .unwrap_err()
+                .to_string()
+                .contains("超出 1 字节"));
+            assert!(plan.check_ap_range("AP", u32::from(mib) << 20, 1).is_err());
+        }
+    }
+
+    #[test]
+    fn 校验结果不能只看命令_ack() {
+        assert!(verify_runtime_result(&[1, 0, 0, 0]).is_ok());
+        for data in [&[][..], &[1], &[0, 0, 0, 0], &[0, 1, 0, 0], &[1, 0, 0, 0, 0]] {
+            assert!(verify_runtime_result(data).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "需指定真机端口和固件；仅进入 Boot、加载 RAM AgentBoot、校验及复位，不擦写 Flash"]
+    fn ec7xx_live_verify_target() -> Result<()> {
+        let port = std::env::var("LUATOS_PORT")?;
+        let plan = parse_soc(&std::env::var("LUATOS_SOC")?)?;
+        let progress: ProgressCallback = Box::new(|p| eprintln!("{}", p.message));
+        let (_, mib) = plan.hardware_profile()?;
+        let mib = mib.context("验包测试需要 EC7xx 固件")?;
+        let boot = auto_enter_boot_mode(Some(&port), &progress)?;
+        let mut session = load_flash_agent(&plan, &boot, &progress, &AtomicBool::new(false))?;
+        let result = verify_target(session.as_mut(), mib);
+        eprintln!("{port} -> {boot}: {} / {mib} MiB: {result:?}", plan.binpkg.chip);
+        sys_reset(session.as_mut()).context("验证后复位失败")?;
+        result
+    }
 
     fn ec716_test_package() -> Vec<u8> {
         let mut package = vec![0; 0x1D8];

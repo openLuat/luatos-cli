@@ -423,3 +423,24 @@ luatos-cli flash test --soc firmware.soc --port COM3 --keyword "LuatOS@"
 - 参考项目: https://github.com/yuzhan-tech/luatos-tools
 - Python参考: D:\github\luatools_py3 (soc.py, usb_device.py)
 - 固件源码: luatos-soc-2024 代码库
+
+## 双板烧录防错
+
+每块板各有一个下载口，VID/PID 并不是设备身份。烧录时将同一 USB 物理位置的运行态接口归为一块板；重启只接受该位置的下载口。无法取得位置时可手动进入 Boot 并显式指定下载口。
+
+EC7xx 在首次烧录前先做一次 LPC sync + RunTmCfg（全量和仅脚本共用）：
+扩展命令号和数据长度各占一个小端 u32，随后为 `20 02 01 xx`，
+其中 xx 为 AP Flash 的 MiB 数（EC718HM 为 08，EC718PM 为 04）。
+这是芯片参数的容量验证，不设置板级参数。结果是 4 字节状态字，bit0 为整体成功；
+仅有 ACK 不算通过。协议不返回商品型号字符串或实测字节数。
+
+双板回归时可先只验证、不烧录：设置 `LUATOS_PORT` 为目标板运行态串口或下载口，`LUATOS_SOC` 为完整固件路径，执行 `cargo test -p luatos-flash ec7xx_live_verify_target -- --ignored --nocapture`。测试使用与烧录相同的 USB 选板、ROM 和容量校验；获得容量结果后请求复位。正确固件应通过，对调固件应报配置不匹配。
+
+**2026-11-19 Windows 双板实测**（未擦写 Flash）：
+
+| 目标运行口 | `EC718HM_PRD`（Air8000，8 MiB） | `EC718PM_PRD`（Air780EPM，4 MiB） |
+|---|---|---|
+| COM26（USB `1-2.3.1`） | 通过 | 设备拒绝 |
+| COM5（USB `1-2.3.2`） | 设备拒绝 | 通过 |
+
+两板同时运行时 `auto` 列出候选端口并停止。另让 COM5 所在板先进入 Boot（COM8），再指定 COM26：CLI 在另一 USB 插口找到新下载口 COM28 并通过 8 MiB 校验；COM8 未被选中，随后单独验证 4 MiB 通过。两板复位后 Windows 将两个插口的用户串口重新分配为 COM5（`1-2.3.1`）和 COM33（`1-2.3.2`）；不能将表中的 COM 号当作永久设备标识。

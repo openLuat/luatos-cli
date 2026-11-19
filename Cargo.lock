@@ -999,7 +999,9 @@ name = "luatos-flash"
 version = "1.12.0"
 dependencies = [
  "anyhow",
+ "core-foundation",
  "crc32fast",
+ "io-kit-sys 0.4.1",
  "log",
  "luatos-codec",
  "luatos-luadb",
@@ -1013,6 +1015,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "walkdir",
+ "windows-sys 0.59.0",
  "zip",
 ]
 

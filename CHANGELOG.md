@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### 修复
+
+#### EC7xx：防止多板连接时烧错设备
+
+- 自动选择遇到多个物理设备时停止并列出端口；显式选择运行态端口后按 USB 插口跟踪 Boot 口。
+- 全量和仅脚本烧录均在首次写入前核对 Boot ROM 芯片族，再由 AgentBoot 验证 Flash 容量；包内脚本和替换脚本均按实际镜像大小检查分区边界，超限时提示字节差额。
+
 ## [1.12.0] - 2026-11-16
 
 ### 迁移

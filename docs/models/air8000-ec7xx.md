@@ -39,7 +39,8 @@ luatos-cli log view-binary --port auto --baud 921600 --probe
 - EC718 USB CDC 在 Windows 下 2000000 常被改成 `921600`；**仅当打开的口就是 USB 日志口 x.2** 才 remap。CH340 调试口保持用户波特率 + 0xA5
 - USB CDC `--probe` 发 `7E 00 00 7E`；CH340 仍发 0xA5 探测帧
 - 运行时重启：`luatos-cli device reboot --chip air8000`（优先 x.2 DIAG `7E 00 01 7E`，不是进下载模式）
-- 刷机与日志端口可能重枚举，`auto` 更稳妥
+- 单板可用 `--port auto`。多板请用 `--port COMx` 指定目标板；运行态到 Boot 的关联以 USB 插口为准。驱动未提供位置时，手动让目标板进 Boot，再指定其下载口。
 - `flash run --script` 会递归收集所选目录并生成 script.bin，覆盖 SOC 包内自带脚本
 - Air780EPM ROM rev3 需使用新版 EC718M USB AgentBoot（已内置）；旧版会在下载 AgentBoot 后掉线并报 Windows 错误 121。USB 下载使用 921600，与 SOC 中的 UART `force_br` 无关
 - 量产 SOC 可能同时包含 `core.binpkg` 与 `luatos.binpkg`，刷机严格按 `info.json` 中的 `rom.file` 选取底层固件
+- Air8000W（EC718HM）与 Air780EPM（EC718PM）的 AP Flash 配置分别为 8 MiB 和 4 MiB。AgentBoot 在首次擦写前验证固件要求的容量；此验证不能区分同芯片、同容量的板级变种。

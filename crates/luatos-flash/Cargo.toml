@@ -24,3 +24,10 @@ sevenz-rust2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+io-kit-sys = "0.4"
+core-foundation = "0.10"
